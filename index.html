@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width,minimum-scale=1.0,maximum-scale=1.0"/>
+	<title>播放器</title>
+	<style type="text/css">
+		body{
+			margin:0;
+			padding: 0;
+		}
+		.box {
+			/*background: #f00;*/
+			border: 1px solid #f00;
+			width: 0px;
+			height: 0px;
+			position: absolute;
+			/*opacity: 0.5;*/
+		}
+		.circle{
+			border-radius: 50%;
+		}
+		p{
+			margin:0;
+		}
+		button{
+			margin-bottom: 5px;
+		}
+		.play{
+			vertical-align: top;
+		}
+		.video-container{
+			width: 854px;
+			height: 480px;
+			overflow: hidden;
+		}
+		/*时间栏*/
+		.show-time{
+			display: inline-block;
+			vertical-align: top;
+		}
+		/*进度条*/
+		#progress_bar{
+			width: 500px;
+			background-color: #777;
+			position: relative;
+			height: 20px;
+			display: inline-block;
+		}
+		#progress_point{
+			height: 20px;
+			width: 20px;
+			cursor: pointer;
+			position: absolute;
+			left: 0;
+			border-radius: 50%;
+			background-color: #0098ff;
+		}
+		/*音量栏*/
+		.vol-control{
+			display: inline-block;
+		}
+		.vol-control span{
+			vertical-align: top;
+			font-size: 12px;
+			display: inline-block;
+			line-height: 24px;
+		}
+		#vol_range{
+			width: 60px;
+		}
+		/*图像控制*/
+		.img-control{
+			display: none;
+			position: absolute;
+			top: 0;
+			background-color: white;
+			opacity: 0.8;
+			padding: 10px;
+		}
+		/*改变滑块input的默认样式*/
+		input { -webkit-appearance:none!important; background:#777;  width:100%; border-radius:3px; height:20px; }
+		input::-webkit-slider-thumb {
+		  -webkit-appearance:none!important; width:10px; height:20px;  background:#0098ff; border-radius:3px;
+		}
+	</style>
+</head>
+<body>
+	<div class="video-container">
+		<video id="myPlayer" src="video/trailer.mp4"></video>	
+	</div>
+	<!-- 基本控制栏 -->
+	<div>
+		<button class="play">播放</button>
+		<p class="show-time"><span class="show-current">00:00:00</span>/<span class="showDuration">00:00:00</span></p>
+		<!-- 进度条 -->
+		<p id="progress_bar"><span id="progress_point"></span></p>
+
+		<div class="vol-control">
+			<span>音量</span>
+			<input id="vol_range" type="range">
+		</div>
+	</div>
+
+	<div class="img-control">
+		<div><p>亮度</p><input class="brightness" type="range"></div>
+		<div><p>对比度</p><input class="contrast" type="range"></div>
+		<div><p>饱和度</p><input class="saturate" type="range"></div>
+		<div><p>色调</p><input class="hue-rotate" type="range"></div>
+	</div>
+		
+	<div>
+		<!-- <button class="play-back">快退</button> -->
+		<button class="play-forward">快进</button>
+		<button class="fullscreen">全屏显示</button>
+		<button class="loop">循环播放</button>
+		<button class="mute">静音</button>
+		<button class="show-img-control">调整效果</button>
+		<button class="printscreen">截图</button>
+		<button class="draw">画框</button>
+		<button class="draw-circle">画圆形框</button>
+		<button class="clear-draw">清除追踪框</button>
+		<button class="zoom">局部放大</button>
+	</div>
+
+	<canvas id="canvas" ></canvas>
+
+	<script src="http://libs.baidu.com/jquery/2.0.0/jquery.min.js"></script>
+	<script type="text/javascript">
+		var player = document.getElementById('myPlayer'),
+			playerX = player.offsetLeft,
+			playerY = player.offsetTop,
+			playerHeight,
+			playerWidth,
+			containerHeight = $(".video-container").height(),
+			containerWidth = $(".video-container").width(),
+			canDraw = false, // 是否是画框
+			drawCircle = false,  // 是否是画圆形框
+			borderWidth = 1;  // 边框1像素的宽度
+
+		// 播放时长定时器	
+		var	timeCalculater,
+			currentTime,  // 当前时间
+			duration,  // 总时长
+			currentVol;
+
+		// startX, startY 为鼠标点击时相对于画布的初始坐标
+		// endX, endY 为鼠标点击结束时相对于画布的坐标
+		var startX, startY, endX, endY;	
+
+		// 时间数据整理
+		var timeFormat = function(time){
+			var hour = 0, min = 0, sec = 0;
+			time = parseInt(time);
+			if(time > 3600){
+				hour = parseInt(time / 3600);
+				time = time % 3600;
+			}
+			min = parseInt(time / 60); 
+			sec = time % 60;
+			
+			// 小时、分钟、秒不到10，补一位0
+			hour = hour < 10 ? "0" + hour : hour;
+			min = min < 10 ? "0" + min : min;
+			sec = sec < 10 ? "0" + sec : sec;
+			return hour + ":" + min + ":" + sec;
+		}
+
+		// 模拟进度条
+		var progressPoint = document.getElementById("progress_point");
+		var progressBar = document.getElementById("progress_bar");
+		// 拖动进度条
+		var dragged = false,
+		// 局部放大图像
+			zoom = false;
+		// 获得滚动条的长度，滚动点的宽度
+		var barWidth = progressBar.clientWidth,
+			pointWidth = progressPoint.clientWidth,
+			pointX = 0,
+			barX = progressBar.offsetLeft,
+			// 可拖动的总长度就是滚动条减去滚动点的宽度	
+			totalWidth = barWidth - pointWidth;	
+		
+		
+		// 播放进度计时器
+		var timer = function(){
+			timeCalculater = setInterval(function(){
+				currentTime = timeFormat(player.currentTime);
+				console.log(player.currentTime);
+				// 改变显示的播放时间
+				$(".show-current").text(currentTime);
+				// 改变显示的播放进度
+				// 如果不是拖动状态下才改变进度条显示
+				if(!dragged){
+					var rate = player.currentTime / player.duration;
+					progressPoint.style.left = rate * totalWidth + "px";
+				}
+
+				// 播放结束后丢弃定时器
+				if(currentTime >= duration){
+					clearInterval(timeCalculater);
+					// 按钮显示为播放
+					$(".play").text("播放");
+				}
+			}, 500);
+		}
+		
+		// 视频可播放时执行    
+		player.oncanplay = function(){
+			// 在视频加载到可播放时取video的大小值，否则长宽会是video的默认值
+			playerHeight = player.offsetHeight;
+			playerWidth = player.offsetWidth;
+			// 初始时height取不到，视频的高度就是offsetHeight
+			player.height = playerHeight;
+
+			// 读取初始音量
+			$("#vol_range").val(player.volume * 100);
+
+			// 亮度初始值为1
+			$(".brightness").val((1 / 1) * 100);
+			// 对比度初始值为1，最大值为5
+			$(".contrast").val((1 / 5) * 100);
+			// 饱和度初始值为1，最大值为5
+			$(".saturate").val((1 / 5) * 100);
+			// 色相的初始值为0deg，最大为360
+			$(".hue-rotate").val(0);
+
+			// 显示视频总时长    ---要视频加载完成以后才能获取时长
+			duration = timeFormat(player.duration);
+			$(".showDuration").text(duration);
+		};  
+
+		// 音量调整
+		$('#vol_range').bind('input propertychange', function() {
+		   var value = $("#vol_range").val();
+		   player.volume = value / 100; 
+		});
+
+		// 播放和暂停
+		$(".play").on("click", function(){
+			// 判断播放器是否是暂停状态
+			if(player.paused){
+				player.play();
+				// 开始播放则开始更新播放进度
+				timer();
+				$(".play").text("暂停");
+			}else{
+				player.pause();
+				clearInterval(timeCalculater);
+				$(".play").text("播放");
+			}			
+		})
+
+		// 倒播
+		// 倒播只支持chrome(某些版本不支持)和safari
+		$(".play-back").on('click', function(){
+			player.playbackRate = -1;
+			console.log("播放速度:" + player.playbackRate);
+		})
+
+		// 正播快进
+		$(".play-forward").on('click', function(){
+			player.playbackRate = 2;
+			console.log("播放速度:" + player.playbackRate);
+		})
+
+		// 全屏显示
+		$('.fullscreen').on('click', function() {
+			//！-- 需要配置兼容性
+			//For Webkit
+			player.webkitRequestFullScreen();
+
+			return false;
+		});
+
+		// 循环播放
+		$('.loop').on('click', function() {
+			player.loop = true;
+		});
+
+		// 静音
+		$(".mute").on("click", function(){
+			// 如果音量大于0静音
+			if (player.volume) {
+				currentVol = player.volume;
+				$("#vol_range").val(0);
+				player.volume = 0;
+			}else{
+				// 注意音量是0到1中的取值，而input是0到100
+				$("#vol_range").val(currentVol * 100);
+				player.volume = currentVol;
+			}
+		});
+		
+		$(".show-img-control").on("click", function(){
+			$(".img-control").toggle();
+		})
+
+		// 截图功能
+		$(".printscreen").on("click", function(){
+			var canvas = document.getElementById('canvas');//获取前台的canvas对象，用于作图
+				ctx = canvas.getContext('2d'),//设置canvas绘制2d图，
+				width = 854,//设置canvas宽
+				height = 480;//设置canvas高
+			canvas.width = width;
+			canvas.height = height;
+			ctx.drawImage(player, 0, 0, width, height);//将video视频绘制到canvas中
+
+			
+
+			// 如果图像中有框，一起画出位置
+			var ab = document.getElementById("active_box");
+			if(ab){
+				function drawSquare(){
+					ctx.strokeStyle='#f00';  //填充颜色
+					// 按对应比例位置画出框
+					var newStartX = startX / playerWidth * width,
+						newStartY = startY / playerHeight * height,
+						newEndX = endX / playerWidth * width,
+						newEndY = endY / playerHeight * height;
+
+					ctx.lineWidth = 1;
+				  	ctx.strokeRect(newStartX, newStartY , newEndX - newStartX, newEndY - newStartY);  
+				}
+
+				// 这个画椭圆的方法用了均匀压缩法
+				function drawCircle(){
+					// 算出椭圆的中心坐标和横半轴长、纵半轴长
+					var x = (endX - startX) / 2 + startX,
+					    y = (endY - startY) / 2 + startY,
+						newX = (x / playerWidth) * width,
+						newY = (y / playerHeight) * height,
+						xWidth = (endX - startX)/2,
+						yHeight = (endY - startY)/2,
+						newXWidth = (xWidth/playerWidth)*width,
+						newYHeight = (yHeight/playerHeight)*height;
+
+					// 指定椭圆颜色放在代码中间无效，暂未清楚原因
+					ctx.strokeStyle = "#f00";
+					ctx.save();
+					//选择newXWidth、newYHeight中的较大者作为arc方法的半径参数
+					var r = (newXWidth > newYHeight) ? newXWidth : newYHeight; 
+					var ratioX = newXWidth / r; //横轴缩放比率
+					var ratioY = newYHeight / r; //纵轴缩放比率
+					ctx.scale(ratioX, ratioY); //进行缩放（均匀压缩）
+					ctx.beginPath();
+					//从椭圆的左端点开始逆时针绘制
+					ctx.moveTo((newX + newXWidth) / ratioX, newY / ratioY);
+					ctx.arc(newX / ratioX, newY / ratioY, r, 0, 2 * Math.PI);
+					ctx.closePath();
+					ctx.restore();
+					ctx.stroke();
+				}
+
+				// 判断是否是椭圆
+				if($(ab).hasClass("circle")){
+					drawCircle();
+					return;
+				}
+				drawSquare();
+			}
+
+			// ！-- 下载截图会碰到图片跨域问题
+			// var image = canvas.toDataURL('image/png');//canvas的api中的toDataURL（）保存图像
+
+			// 如果输出jpg可以调整文件的清晰度
+			// console.log(canvas.toDataURL("image/jpeg", 1));
+
+		})
+
+		// 画追踪框
+		$(".draw").on("click", function(){
+			// 清除已有框
+			var ab = document.getElementById("active_box");
+			if(ab){
+				ab.remove();
+			}
+			
+			canDraw = true;
+		})
+		// 画圆形追踪框
+		$(".draw-circle").on("click", function(){
+			// 清除已有框
+			var ab = document.getElementById("active_box");
+			if(ab){
+				ab.remove();
+			}
+
+			canDraw = true;
+			drawCircle = true;
+		})
+		// 清除追踪框
+		$(".clear-draw").on("click", function(){
+			// 清除已有框
+			var ab = document.getElementById("active_box");
+			if(ab){
+				ab.remove();
+			}
+		})
+
+		$(".zoom").on("click", function(){
+			// 如果已有框，先清除
+			var ab = document.getElementById("active_box");
+			if(ab){
+				ab.remove();
+			}
+			// 如果已经局部放大，则恢复原大小
+			if(player.height !== playerHeight){
+				player.height = playerHeight;
+				// 缩放回原位置
+				$("#myPlayer").css("object-position", "50% 50%");
+				return;
+			}
+			zoom = true;
+		})
+
+
+		// 图像控制
+		// 亮度(取值0-1)
+		$('.brightness').bind('input propertychange', function() {
+			var value = $(".brightness").val() / 100;
+			$("#myPlayer").css('filter', "brightness(" + value + ")");
+			$("#myPlayer").css('-webkit-filter', "brightness(" + value + ")"); 
+		});
+		// 对比度(取值0-5)
+		$('.contrast').bind('input propertychange', function() {
+			var value = $(".contrast").val() / 100;
+			$("#myPlayer").css('filter', "contrast(" + value * 5 + ")");
+			$("#myPlayer").css('-webkit-filter', "contrast(" + value * 5 + ")"); 
+		});
+		// 饱和度(取值0-5)
+		$('.saturate').bind('input propertychange', function() {
+			var value = $(".saturate").val() / 100;
+			$("#myPlayer").css('filter', "saturate(" + value * 5 + ")");
+			$("#myPlayer").css('-webkit-filter', "saturate(" + value * 5 + ")"); 
+		});
+		// 色相(取值0-360deg)
+		$('.hue-rotate').bind('input propertychange', function() {
+			var value = $(".hue-rotate").val() / 100;
+			$("#myPlayer").css('filter', "hue-rotate(" + value * 360 + "deg)");
+			$("#myPlayer").css('-webkit-filter', "hue-rotate(" + value * 360 + "deg)"); 
+		});
+
+		window.onload = function(e) {
+			e = e || window.event;  
+			// 鼠标按下
+			document.onmousedown = function(e) { 
+				
+				// 1、如果是拖拽进度条
+				if (e.target.id === "progress_point") {
+					dragged = true;
+					return;
+				}
+
+				// 2、如果是画追踪框, 局部放大也要画一个区域
+				// 只能在video区域画框,而且只能画一个框
+				if((e.target.id !== "myPlayer" || !canDraw) && (!zoom || e.target.id !== "myPlayer")){
+					return;
+				}
+
+				startX = e.pageX - playerX;
+				startY = e.pageY - playerY;
+				
+				// 起始点相对于视频的位置
+				var x = startX / playerWidth ;
+				var y = startY / playerHeight ;
+
+				// 在页面创建 box
+				var active_box = document.createElement("div");
+				active_box.id = "active_box";
+				active_box.className = drawCircle ? "box circle" : "box";
+				active_box.style.top = startY + playerY + 'px';
+				active_box.style.left = startX + playerX + 'px';
+				document.body.appendChild(active_box);
+
+			};
+				   
+			// 鼠标移动
+			document.onmousemove = function(e) {
+				// 1、如果是拖拽进度条
+				if(dragged){
+					// 因为滚动点是相对父元素的绝对定位，而e.pageX是相对于页面的左侧距离，所以需要减去一个progressBar左侧的距离
+					var left = e.pageX - barX;
+					// 圆点的拖拽不能超出进度条范围
+					if (left > totalWidth) {
+						left = totalWidth;
+					}else if(left < 0){
+						left = 0;
+					}
+					progressPoint.style.left = left + "px";
+					var newCurrentTime = left / totalWidth * player.duration;
+
+					// 调整播放进度
+					player.currentTime = newCurrentTime;
+
+					// 调整播放进度显示
+					timer();
+				}
+
+				// 2、如果是画追踪框
+				// 更新 box 尺寸
+				// ！-- 在少数x值增加太少时，结束点的坐标会出现异常
+				if((document.getElementById("active_box") !== null) && canDraw) {
+					var ab = document.getElementById("active_box");
+					var width = e.pageX - playerX - startX;
+					var height = e.pageY - playerY - startY;
+					// 框的大小不能超出视频范围
+					width = width + startX > containerWidth ? containerWidth - startX : width;
+					height = height + startY > containerHeight ? containerHeight - startY : height;
+
+					// if(width - 2 * borderWidth < 0){
+					// 	width = 2;
+					// 	console.log(width);
+					// }
+					// if(height - 2 * borderWidth < 0){
+					// 	height = 2;
+					// }
+
+					// 计算宽度和高度时应减去两侧的边框
+					width = width - 2 * borderWidth;
+					height = height - 2 * borderWidth;
+
+					// 结束点必然为开始点加上宽度或者高度再加上一条边距的距离
+					endX = startX + width + borderWidth;
+					endY = startY + height + borderWidth;
+
+					ab.style.width = width + 'px';
+					ab.style.height = height + 'px';
+				}
+
+				// 3、如果是局部放大，则放大部分的选择框与视频的比例相同
+				if((document.getElementById("active_box") !== null) && zoom){
+					// 视频比例
+					var videoRate = playerWidth / playerHeight;
+					var ab = document.getElementById("active_box");
+					var width = e.pageX - playerX - startX;
+					var height = e.pageY - playerY - startY;
+					
+					// 框不能超出视频范围
+					height = height + startY > playerHeight ? playerHeight - startY : height;
+					var width = height * videoRate;
+
+					if(width + startX > playerWidth){
+						width = playerWidth - startX;
+						height = width / videoRate;
+					}
+					
+					// 计算宽度和高度时应减去两侧的边框
+					width = width - 2 * borderWidth;
+					height = height - 2 * borderWidth;
+
+					// 结束点必然为开始点加上宽度或者高度再加上一条边距的距离
+					endX = startX + width + borderWidth;
+					endY = startY + height + borderWidth;
+
+					ab.style.width = width + 'px';
+					ab.style.height = height + 'px';
+				}
+
+			};
+				   
+			// 鼠标抬起
+			document.onmouseup = function(e) {
+				// 1、如果拖拽进度条
+				dragged = false;
+
+				// 2、如果是画追踪框或者放大操作才继续执行
+				if (!canDraw && !zoom) {
+					return;
+				}
+
+				// 如果鼠标拖拽过远，虽然现实的框依旧在视频区域内，但是实际的坐标已超出视频区域，所以要做限制
+				// endX = e.pageX - playerX > playerWidth ? playerWidth - borderWidth : e.pageX - playerX - borderWidth;
+				// endY = e.pageY - playerY > playerHeight ? playerHeight - borderWidth : e.pageY - playerY - borderWidth;
+
+				// 画完结束充值参数
+				canDraw = false;
+				drawCircle = false;
+
+				// 如果画的区域长宽均小于 3px，移除 box
+				if(document.getElementById("active_box") !== null) {
+					var ab = document.getElementById("active_box");
+					if(ab.offsetWidth < 3 || ab.offsetHeight < 3) {
+						document.body.removeChild(ab);
+					}
+				}
+
+				// 3、如果是局部放大操作
+				// 保证是在有选择框的情况下
+				if(zoom && (document.getElementById("active_box") !== null)){
+					// 确定放大的区域
+					// 起始点相对于视频的位置
+					var x = startX / playerWidth ;
+					var y = startY / playerHeight ;
+
+					// 算出放大的比例
+					var height = endY - startY;
+					var width = endX - startX;
+					var zoomRate = playerHeight / height;
+					
+					// 放大
+					var zoomHeight = playerHeight * zoomRate;
+					var zoomWidth = playerWidth * zoomRate;
+					// 只改变高或宽中的一个值保证视频比例
+					player.height = zoomHeight;
+					// 放大后的起始坐标
+					x = x * zoomWidth;
+					y = y * zoomHeight;
+					
+					// 以开始坐标为基准调整位置
+					$("#myPlayer").css("object-position", "top -" + y + "px left -" + x + "px");
+					// 移除框
+					var ab = document.getElementById("active_box");
+					if(ab){
+						ab.remove();
+					}
+
+					zoom = false;
+				}
+			};
+		};
+	</script>
+</body>
+</html>
